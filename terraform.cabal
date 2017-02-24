@@ -1,0 +1,36 @@
+name:                   terraform
+version:                0.1.0.0
+homepage:               https://github.com/seanparsons/terraform
+license:                BSD3
+license-file:           LICENSE
+author:                 Sean Parsons
+maintainer:             github@futurenotfound.com
+copyright:              2017 Sean Parsons
+category:               Deployment
+build-type:             Simple
+extra-source-files:     README.md
+cabal-version:          >=1.10
+
+library
+  hs-source-dirs:       src
+  exposed-modules:      Terraform
+  default-language:     Haskell2010
+  default-extensions:   OverloadedStrings
+                      , ViewPatterns
+  ghc-options:          -Wall
+  build-depends:        base >= 4.7 && < 5
+                      , language-hcl
+                      , scientific
+                      , bytestring
+                      , text
+                      , unordered-containers
+
+test-suite terraform-test
+  type:                 exitcode-stdio-1.0
+  hs-source-dirs:       test
+  main-is:              Tasty.hs
+  other-modules:        FooTest
+  build-depends:        base
+                      , tasty-discover
+                      , tasty-th
+  default-language:     Haskell2010
