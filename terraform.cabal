@@ -26,6 +26,7 @@ library
   ghc-options:          -Wall -fno-warn-orphans
   build-depends:        base >= 4.7 && < 5
                       , language-hcl
+                      , hashable
                       , scientific
                       , bytestring
                       , text
@@ -36,8 +37,14 @@ test-suite terraform-test
   hs-source-dirs:       test
   main-is:              Tasty.hs
   other-modules:        TerraformTest
-  build-depends:        base
+  build-depends:        base >= 4.7 && < 5
                       , terraform
+                      , language-hcl
+                      , hashable
+                      , scientific
+                      , bytestring
+                      , text
+                      , unordered-containers
                       , tasty-discover
                       , tasty-quickcheck
                       , QuickCheck

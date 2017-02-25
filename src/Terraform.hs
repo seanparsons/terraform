@@ -1,5 +1,6 @@
 module Terraform where
 
+import Data.Hashable
 import Data.Text hiding (empty)
 import Data.HCL
 import Data.Scientific
@@ -114,6 +115,10 @@ tfValueToHCLValue (TerraformList tfValue)         = HCLList $ fmap tfValueToHCLV
 tfMapToHCLMap :: TerraformMapContent -> HCLMapContent
 tfMapToHCLMap = fmap tfValueToHCLValue
 
+insertMaybe :: (Eq k, Hashable k) => k -> Maybe a -> HashMap k a -> HashMap k a
+insertMaybe _ Nothing toUpdate              = toUpdate
+insertMaybe mapKey (Just mapValue) toUpdate = insert mapKey mapValue toUpdate
+
 tfStatementToHCLStatement :: TerraformStatement -> HCLStatement
 tfStatementToHCLStatement (Resource typeOfResource nameOfResource content) =
   HCLStatementObject $ HCLObject ["resource", typeOfResource, nameOfResource] (tfMapToHCLMap content)
@@ -122,16 +127,23 @@ tfStatementToHCLStatement (DataSource typeOfDataSource nameOfDataSource content)
 tfStatementToHCLStatement (Provider nameOfProvider content) =
   HCLStatementObject $ HCLObject ["provider", nameOfProvider] (tfMapToHCLMap content)
 tfStatementToHCLStatement (Variable nameOfVariable typeOfVariable defaultValue description) =
-  HCLStatementObject $ HCLObject ["variable", nameOfVariable] empty
+  HCLStatementObject $ HCLObject ["variable", nameOfVariable] $
+    insertMaybe ["type"] (fmap variableTypeToHCLValue typeOfVariable) $
+    insertMaybe ["default"] (fmap tfValueToHCLValue defaultValue) $
+    insertMaybe ["description"] (fmap tfValueToHCLValue description) $
+    empty
 tfStatementToHCLStatement (Output nameOfOutput valueOfOutput dependsOn sensitive) =
-  HCLStatementObject $ HCLObject ["output", nameOfOutput] empty
+  HCLStatementObject $ HCLObject ["output", nameOfOutput] $ 
+    insert ["value"] (tfValueToHCLValue valueOfOutput) $
+    insertMaybe ["depends_on"] (fmap tfValueToHCLValue dependsOn) $
+    insertMaybe ["sensitive"] (fmap boolToHCLValue sensitive) $
+    empty
 tfStatementToHCLStatement (Module nameOfModule sourceOfModule content) =
-  HCLStatementObject $ HCLObject ["module", nameOfModule] (tfMapToHCLMap content)
+  HCLStatementObject $ HCLObject ["module", nameOfModule] (insert ["source"] (HCLString [HCLStringPlain sourceOfModule]) $ tfMapToHCLMap content)
 tfStatementToHCLStatement (Terraform content) =
   HCLStatementObject $ HCLObject ["terraform"] (tfMapToHCLMap content)
 tfStatementToHCLStatement (Atlas content) =
   HCLStatementObject $ HCLObject ["atlas"] (tfMapToHCLMap content)
-
 
 expectObjectValue :: HCLMapContent -> Text -> Either StatementParseFailure TerraformValue
 expectObjectValue content objectKey = do
@@ -146,6 +158,11 @@ parseVariableType (TerraformString [TerraformStringPlain "string"]) = Right Stri
 parseVariableType (TerraformString [TerraformStringPlain "map"])    = Right MapType
 parseVariableType (TerraformString [TerraformStringPlain "list"])   = Right ListType
 parseVariableType terraformValue                                    = Left $ InvalidVariableType terraformValue
+
+variableTypeToHCLValue :: TerraformVariableType -> HCLValue
+variableTypeToHCLValue StringType = HCLString [HCLStringPlain "string"]
+variableTypeToHCLValue MapType    = HCLString [HCLStringPlain "map"]
+variableTypeToHCLValue ListType   = HCLString [HCLStringPlain "list"]
 
 parseVariableAsBool :: TerraformValue -> Either StatementParseFailure Bool
 parseVariableAsBool (TerraformIdentifier "true")    = Right True
@@ -227,7 +244,7 @@ parseModule nameOfModule content = do
   return $ Module
             { moduleName            = nameOfModule
             , moduleSource          = sourceValue
-            , moduleContent         = parsedContent
+            , moduleContent         = delete ["source"] parsedContent
             }
 
 parseTerraform :: HCLMapContent -> Either StatementParseFailure TerraformStatement
