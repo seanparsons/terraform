@@ -1,5 +1,7 @@
 module TerraformTest where
 
+import Data.Text
+import Prelude hiding (print)
 import Test.Tasty.QuickCheck
 import Test.QuickCheck
 import Test.QuickCheck.Instances()
@@ -34,9 +36,18 @@ instance Arbitrary TerraformValue where
 
 derive makeArbitrary ''TerraformStatement
 
+derive makeArbitrary ''TerraformConfig
+
 toHCLAndBack = testProperty "parseHCLStatement $ tfStatementToHCLStatement == Right" $ \statement ->
     let parsedResult = parseHCLStatement $ tfStatementToHCLStatement statement
     in  counterexample ("parsedResult = " ++ (show parsedResult)) (parsedResult == Right statement)
+
+printAndParseText = testProperty "TerraformConfigSyntax Text" $ \config ->
+    let printedResult = print config :: Text
+        parsedResult = parse printedResult
+    in  counterexample ("printedResult = " ++ (show printedResult)) $
+        counterexample ("parsedResult = " ++ (show parsedResult)) $
+        (parsedResult == Right config)
 
 toHCLStringPartAndBack = testProperty "hclPartToTFPart $ tfPartToHCLPart == id" $ \stringPart ->
     let parsedResult = hclPartToTFPart $ tfPartToHCLPart stringPart
@@ -45,6 +56,7 @@ toHCLStringPartAndBack = testProperty "hclPartToTFPart $ tfPartToHCLPart == id" 
 test_Terraform = [
                     testGroup "Terraform"
                       [ toHCLAndBack
+                      , printAndParseText
                       , toHCLStringPartAndBack
                       ]
                  ]

@@ -1,5 +1,6 @@
 module Terraform where
 
+import Data.Bifunctor
 import Data.Hashable
 import Data.Text hiding (empty)
 import Data.HCL
@@ -8,6 +9,7 @@ import Data.HashMap.Strict
 import Prelude hiding (lookup)
 import Data.List (sortOn)
 import GHC.Generics hiding (moduleName)
+import Text.Megaparsec.Error
 
 data TerraformVariableType = StringType
                            | ListType
@@ -21,7 +23,7 @@ data TerraformStringPart = TerraformStringPlain Text
 type TerraformMapContent = HashMap [Text] TerraformValue
 
 instance Ord TerraformMapContent where
-  compare first second = compare (sortOn fst $ toList first) (sortOn fst $ toList second)
+  compare firstMap secondMap = compare (sortOn fst $ toList firstMap) (sortOn fst $ toList secondMap)
 
 data TerraformValue = TerraformNumber Scientific
                     | TerraformString [TerraformStringPart]
@@ -76,7 +78,7 @@ deriving instance Ord HCLStringPart
 deriving instance Ord HCLValue
 
 instance Ord HCLMapContent where
-  compare first second = compare (sortOn fst $ toList first) (sortOn fst $ toList second)
+  compare firstMap secondMap = compare (sortOn fst $ toList firstMap) (sortOn fst $ toList secondMap)
 
 deriving instance Ord HCLStatement
 
@@ -87,7 +89,27 @@ data StatementParseFailure = UnexpectedValue HCLValue
                            | NotABool TerraformValue
                            | NotAString TerraformValue
                            | UnexpectedStatement HCLStatement
+                           | HCLParseFailure Text
                            deriving (Eq, Ord, Show, Generic)
+
+newtype TerraformConfig = TerraformConfig [TerraformStatement]
+                          deriving (Eq, Ord, Show, Generic)
+
+hclParseErrorAsParseFailure :: ParseError Char Dec -> StatementParseFailure
+hclParseErrorAsParseFailure parserError = HCLParseFailure $ pack $ show parserError
+
+class TerraformConfigSyntax a where
+  parse :: a -> Either StatementParseFailure TerraformConfig
+  print :: TerraformConfig -> a
+
+instance TerraformConfigSyntax Text where
+  parse :: Text -> Either StatementParseFailure TerraformConfig
+  parse parseInput = do
+    hclDoc <- first hclParseErrorAsParseFailure $ parseHCL "" parseInput
+    statements <- traverse parseHCLStatement hclDoc
+    return $ TerraformConfig statements
+  print :: TerraformConfig -> Text
+  print (TerraformConfig statements) = pack $ show $ pPrintHCL $ fmap tfStatementToHCLStatement statements
 
 hclPartToTFPart :: HCLStringPart -> TerraformStringPart
 hclPartToTFPart (HCLStringPlain hclValue)      = TerraformStringPlain hclValue
@@ -133,7 +155,7 @@ tfStatementToHCLStatement (Variable nameOfVariable typeOfVariable defaultValue d
     insertMaybe ["description"] (fmap tfValueToHCLValue description) $
     empty
 tfStatementToHCLStatement (Output nameOfOutput valueOfOutput dependsOn sensitive) =
-  HCLStatementObject $ HCLObject ["output", nameOfOutput] $ 
+  HCLStatementObject $ HCLObject ["output", nameOfOutput] $
     insert ["value"] (tfValueToHCLValue valueOfOutput) $
     insertMaybe ["depends_on"] (fmap tfValueToHCLValue dependsOn) $
     insertMaybe ["sensitive"] (fmap boolToHCLValue sensitive) $
@@ -279,3 +301,4 @@ parseHCLStatement (HCLStatementObject (HCLObject ["terraform"] content)) =
 parseHCLStatement (HCLStatementObject (HCLObject ["atlas"] content)) =
   parseAtlas content
 parseHCLStatement hclStatement = Left $ UnexpectedStatement hclStatement
+

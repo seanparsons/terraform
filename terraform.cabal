@@ -23,6 +23,7 @@ library
                       , MultiParamTypeClasses
                       , DeriveGeneric
                       , TemplateHaskell
+                      , InstanceSigs
   ghc-options:          -Wall -fno-warn-orphans
   build-depends:        base >= 4.7 && < 5
                       , language-hcl
@@ -31,6 +32,7 @@ library
                       , bytestring
                       , text
                       , unordered-containers
+                      , megaparsec
 
 test-suite terraform-test
   type:                 exitcode-stdio-1.0
@@ -45,6 +47,7 @@ test-suite terraform-test
                       , bytestring
                       , text
                       , unordered-containers
+                      , megaparsec
                       , tasty-discover
                       , tasty-quickcheck
                       , QuickCheck
@@ -61,4 +64,5 @@ test-suite terraform-test
                       , MultiParamTypeClasses
                       , DeriveGeneric
                       , TemplateHaskell
+                      , InstanceSigs
   ghc-options:          -Wall -fno-warn-orphans
