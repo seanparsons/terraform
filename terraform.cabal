@@ -17,7 +17,13 @@ library
   default-language:     Haskell2010
   default-extensions:   OverloadedStrings
                       , ViewPatterns
-  ghc-options:          -Wall
+                      , TypeSynonymInstances
+                      , FlexibleInstances
+                      , StandaloneDeriving
+                      , MultiParamTypeClasses
+                      , DeriveGeneric
+                      , TemplateHaskell
+  ghc-options:          -Wall -fno-warn-orphans
   build-depends:        base >= 4.7 && < 5
                       , language-hcl
                       , scientific
@@ -29,8 +35,23 @@ test-suite terraform-test
   type:                 exitcode-stdio-1.0
   hs-source-dirs:       test
   main-is:              Tasty.hs
-  other-modules:        FooTest
+  other-modules:        TerraformTest
   build-depends:        base
+                      , terraform
                       , tasty-discover
+                      , tasty-quickcheck
+                      , QuickCheck
+                      , quickcheck-instances
                       , tasty-th
+                      , tasty
+                      , derive
   default-language:     Haskell2010
+  default-extensions:   OverloadedStrings
+                      , ViewPatterns
+                      , TypeSynonymInstances
+                      , FlexibleInstances
+                      , StandaloneDeriving
+                      , MultiParamTypeClasses
+                      , DeriveGeneric
+                      , TemplateHaskell
+  ghc-options:          -Wall -fno-warn-orphans

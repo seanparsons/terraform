@@ -3,6 +3,8 @@ packages:
 - '.'
 extra-deps:
 - language-hcl-0.1.2.0
+- derive-2.5.26
+- haskell-src-exts-1.17.1
 extra-package-dbs: []
 nix:
     enable: true

@@ -1,44 +1,47 @@
 module Terraform where
 
-import Data.Text
+import Data.Text hiding (empty)
 import Data.HCL
 import Data.Scientific
 import Data.HashMap.Strict
 import Prelude hiding (lookup)
+import Data.List (sortOn)
+import GHC.Generics hiding (moduleName)
 
 data TerraformVariableType = StringType
                            | ListType
                            | MapType
-                           deriving (Eq, Show)
+                           deriving (Eq, Ord, Show, Generic)
 
 data TerraformStringPart = TerraformStringPlain Text
                          | TerraformStringInterpolation Text
-                         deriving (Eq, Show)
-
-type HCLMapContent = HashMap [Text] HCLValue
+                         deriving (Eq, Ord, Show, Generic)
 
 type TerraformMapContent = HashMap [Text] TerraformValue
+
+instance Ord TerraformMapContent where
+  compare first second = compare (sortOn fst $ toList first) (sortOn fst $ toList second)
 
 data TerraformValue = TerraformNumber Scientific
                     | TerraformString [TerraformStringPart]
                     | TerraformIdentifier Text
                     | TerraformMap TerraformMapContent
                     | TerraformList [TerraformValue]
-                    deriving (Eq, Show)
+                    deriving (Eq, Ord, Show, Generic)
 
 data TerraformStatement = Resource
                         { resourceType          :: Text
                         , resourceName          :: Text
-                        , resourceContent       :: TerraformValue
+                        , resourceContent       :: TerraformMapContent
                         }
                         | DataSource
                         { dataSourceType        :: Text
                         , dataSourceName        :: Text
-                        , dataSourceContent     :: TerraformValue
+                        , dataSourceContent     :: TerraformMapContent
                         }
                         | Provider
                         { providerName          :: Text
-                        , providerContent       :: TerraformValue
+                        , providerContent       :: TerraformMapContent
                         }
                         | Variable
                         { variableName          :: Text
@@ -49,38 +52,86 @@ data TerraformStatement = Resource
                         | Output
                         { outputName            :: Text
                         , outputValue           :: TerraformValue
-                        , outputDependsOn       :: Maybe [TerraformValue]
+                        , outputDependsOn       :: Maybe TerraformValue
                         , outputSensitive       :: Maybe Bool
                         }
                         | Module
                         { moduleName            :: Text
                         , moduleSource          :: Text
-                        , moduleContent         :: TerraformValue
+                        , moduleContent         :: TerraformMapContent
                         }
                         | Terraform
-                        { terraformContent      :: TerraformValue
+                        { terraformContent      :: TerraformMapContent
                         }
                         | Atlas
-                        { atlasContent          :: TerraformValue
+                        { atlasContent          :: TerraformMapContent
                         }
-                        deriving (Eq, Show)
+                        deriving (Eq, Ord, Show, Generic)
+
+type HCLMapContent = HashMap [Text] HCLValue
+
+deriving instance Ord HCLStringPart
+
+deriving instance Ord HCLValue
+
+instance Ord HCLMapContent where
+  compare first second = compare (sortOn fst $ toList first) (sortOn fst $ toList second)
+
+deriving instance Ord HCLStatement
 
 data StatementParseFailure = UnexpectedValue HCLValue
                            | UnexpectedVariableContent HCLValue
                            | InvalidVariableType TerraformValue
                            | ObjectValueNotFound HCLMapContent Text
+                           | NotABool TerraformValue
+                           | NotAString TerraformValue
+                           | UnexpectedStatement HCLStatement
+                           deriving (Eq, Ord, Show, Generic)
 
-mapStringPart :: HCLStringPart -> TerraformStringPart
-mapStringPart (HCLStringPlain hclValue)      = TerraformStringPlain hclValue
-mapStringPart (HCLStringInterp hclValue)     = TerraformStringInterpolation hclValue
+hclPartToTFPart :: HCLStringPart -> TerraformStringPart
+hclPartToTFPart (HCLStringPlain hclValue)      = TerraformStringPlain hclValue
+hclPartToTFPart (HCLStringInterp hclValue)     = TerraformStringInterpolation hclValue
+
+tfPartToHCLPart :: TerraformStringPart -> HCLStringPart
+tfPartToHCLPart (TerraformStringPlain tfValue)          = HCLStringPlain tfValue
+tfPartToHCLPart (TerraformStringInterpolation tfValue)  = HCLStringInterp tfValue
 
 parseValue :: HCLValue -> Either StatementParseFailure TerraformValue
 parseValue (HCLNumber hclValue)     = Right $ TerraformNumber hclValue
-parseValue (HCLString parts)        = Right $ TerraformString $ fmap mapStringPart parts
+parseValue (HCLString parts)        = Right $ TerraformString $ fmap hclPartToTFPart parts
 parseValue (HCLIdent hclValue)      = Right $ TerraformIdentifier hclValue
 parseValue (HCLObject [] content)   = fmap TerraformMap $ traverse parseValue content
 parseValue (HCLList elements)       = fmap TerraformList $ traverse parseValue elements
 parseValue hclValue                 = Left $ UnexpectedValue hclValue
+
+tfValueToHCLValue :: TerraformValue -> HCLValue
+tfValueToHCLValue (TerraformNumber tfValue)       = HCLNumber tfValue
+tfValueToHCLValue (TerraformString tfValue)       = HCLString $ fmap tfPartToHCLPart tfValue
+tfValueToHCLValue (TerraformIdentifier tfValue)   = HCLIdent tfValue
+tfValueToHCLValue (TerraformMap tfValue)          = HCLObject [] $ fmap tfValueToHCLValue tfValue
+tfValueToHCLValue (TerraformList tfValue)         = HCLList $ fmap tfValueToHCLValue tfValue
+
+tfMapToHCLMap :: TerraformMapContent -> HCLMapContent
+tfMapToHCLMap = fmap tfValueToHCLValue
+
+tfStatementToHCLStatement :: TerraformStatement -> HCLStatement
+tfStatementToHCLStatement (Resource typeOfResource nameOfResource content) =
+  HCLStatementObject $ HCLObject ["resource", typeOfResource, nameOfResource] (tfMapToHCLMap content)
+tfStatementToHCLStatement (DataSource typeOfDataSource nameOfDataSource content) =
+  HCLStatementObject $ HCLObject ["data", typeOfDataSource, nameOfDataSource] (tfMapToHCLMap content)
+tfStatementToHCLStatement (Provider nameOfProvider content) =
+  HCLStatementObject $ HCLObject ["provider", nameOfProvider] (tfMapToHCLMap content)
+tfStatementToHCLStatement (Variable nameOfVariable typeOfVariable defaultValue description) =
+  HCLStatementObject $ HCLObject ["variable", nameOfVariable] empty
+tfStatementToHCLStatement (Output nameOfOutput valueOfOutput dependsOn sensitive) =
+  HCLStatementObject $ HCLObject ["output", nameOfOutput] empty
+tfStatementToHCLStatement (Module nameOfModule sourceOfModule content) =
+  HCLStatementObject $ HCLObject ["module", nameOfModule] (tfMapToHCLMap content)
+tfStatementToHCLStatement (Terraform content) =
+  HCLStatementObject $ HCLObject ["terraform"] (tfMapToHCLMap content)
+tfStatementToHCLStatement (Atlas content) =
+  HCLStatementObject $ HCLObject ["atlas"] (tfMapToHCLMap content)
+
 
 expectObjectValue :: HCLMapContent -> Text -> Either StatementParseFailure TerraformValue
 expectObjectValue content objectKey = do
@@ -96,6 +147,23 @@ parseVariableType (TerraformString [TerraformStringPlain "map"])    = Right MapT
 parseVariableType (TerraformString [TerraformStringPlain "list"])   = Right ListType
 parseVariableType terraformValue                                    = Left $ InvalidVariableType terraformValue
 
+parseVariableAsBool :: TerraformValue -> Either StatementParseFailure Bool
+parseVariableAsBool (TerraformIdentifier "true")    = Right True
+parseVariableAsBool (TerraformIdentifier "false")   = Right False
+parseVariableAsBool terraformValue                  = Left $ NotABool terraformValue
+
+boolToHCLValue :: Bool -> HCLValue
+boolToHCLValue True   = HCLIdent "true"
+boolToHCLValue False  = HCLIdent "false"
+
+stringPartAsText :: TerraformStringPart -> Text
+stringPartAsText (TerraformStringPlain textValue)         = textValue
+stringPartAsText (TerraformStringInterpolation textValue) = textValue
+
+parseVariableAsText :: TerraformValue -> Either StatementParseFailure Text
+parseVariableAsText (TerraformString parts)       = Right $ foldMap stringPartAsText parts
+parseVariableAsText terraformValue                = Left $ NotAString terraformValue
+
 parseMapContent :: HCLMapContent -> Either StatementParseFailure TerraformMapContent
 parseMapContent content = traverse parseValue content
 
@@ -103,26 +171,26 @@ parseResource :: Text -> Text -> HCLMapContent -> Either StatementParseFailure T
 parseResource typeOfResource nameOfResource content = do
   parsedContent <- parseMapContent content
   return $ Resource
-            { resourceType      = typeOfResource
-            , resourceName      = nameOfResource
-            , resourceContent   = TerraformMap parsedContent
+            { resourceType          = typeOfResource
+            , resourceName          = nameOfResource
+            , resourceContent       = parsedContent
             }
 
 parseDataSource :: Text -> Text -> HCLMapContent -> Either StatementParseFailure TerraformStatement
-parseDataSource typeOfDatasource nameOfDataSource content = do
+parseDataSource typeOfDataSource nameOfDataSource content = do
   parsedContent <- parseMapContent content
   return $ DataSource
-            { dataSourceType      = typeOfDatasource
-            , dataSourceName      = nameOfDataSource
-            , dataSourceContent   = TerraformMap parsedContent
+            { dataSourceType        = typeOfDataSource
+            , dataSourceName        = nameOfDataSource
+            , dataSourceContent     = parsedContent
             }
 
 parseProvider :: Text -> HCLMapContent -> Either StatementParseFailure TerraformStatement
 parseProvider nameOfProvider content = do
   parsedContent <- parseMapContent content
   return $ Provider
-            { providerName      = nameOfProvider
-            , providerContent   = TerraformMap parsedContent
+            { providerName          = nameOfProvider
+            , providerContent       = parsedContent
             }
 
 parseVariable :: Text -> HCLMapContent -> Either StatementParseFailure TerraformStatement
@@ -138,8 +206,59 @@ parseVariable nameOfVariable content = do
             , variableDescription   = possibleDescription
             }
 
+parseOutput :: Text -> HCLMapContent -> Either StatementParseFailure TerraformStatement
+parseOutput nameOfOutput content = do
+  outputValueValue <- expectObjectValue content "value"
+  possibleDependsOn <- expectMaybeObjectValue content "depends_on"
+  possibleSensitiveValue <- expectMaybeObjectValue content "sensitive"
+  possibleSensitive <- traverse parseVariableAsBool possibleSensitiveValue
+  return $ Output
+            { outputName            = nameOfOutput
+            , outputValue           = outputValueValue
+            , outputDependsOn       = possibleDependsOn
+            , outputSensitive       = possibleSensitive
+            }
+
+parseModule :: Text -> HCLMapContent -> Either StatementParseFailure TerraformStatement
+parseModule nameOfModule content = do
+  moduleSourceValue <- expectObjectValue content "source"
+  sourceValue <- parseVariableAsText moduleSourceValue
+  parsedContent <- parseMapContent content
+  return $ Module
+            { moduleName            = nameOfModule
+            , moduleSource          = sourceValue
+            , moduleContent         = parsedContent
+            }
+
+parseTerraform :: HCLMapContent -> Either StatementParseFailure TerraformStatement
+parseTerraform content = do
+  parsedContent <- parseMapContent content
+  return $ Terraform
+            { terraformContent      = parsedContent
+            }
+
+parseAtlas :: HCLMapContent -> Either StatementParseFailure TerraformStatement
+parseAtlas content = do
+  parsedContent <- parseMapContent content
+  return $ Atlas
+            { atlasContent          = parsedContent
+            }
+
 parseHCLStatement :: HCLStatement -> Either StatementParseFailure TerraformStatement
-parseHCLStatement (HCLStatementObject (HCLObject ["resource", typeOfResource, nameOfResource] content)) = parseResource typeOfResource nameOfResource content
-parseHCLStatement (HCLStatementObject (HCLObject ["data", typeOfDataSource, nameOfDataSource] content)) = parseDataSource typeOfDataSource nameOfDataSource content
-parseHCLStatement (HCLStatementObject (HCLObject ["provider", nameOfProvider] content))                 = parseProvider nameOfProvider content
-parseHCLStatement (HCLStatementObject (HCLObject ["variable", nameOfVariable] content))                 = parseVariable nameOfVariable content
+parseHCLStatement (HCLStatementObject (HCLObject ["resource", typeOfResource, nameOfResource] content)) =
+  parseResource typeOfResource nameOfResource content
+parseHCLStatement (HCLStatementObject (HCLObject ["data", typeOfDataSource, nameOfDataSource] content)) =
+  parseDataSource typeOfDataSource nameOfDataSource content
+parseHCLStatement (HCLStatementObject (HCLObject ["provider", nameOfProvider] content)) =
+  parseProvider nameOfProvider content
+parseHCLStatement (HCLStatementObject (HCLObject ["variable", nameOfVariable] content)) =
+  parseVariable nameOfVariable content
+parseHCLStatement (HCLStatementObject (HCLObject ["output", nameOfOutput] content)) =
+  parseOutput nameOfOutput content
+parseHCLStatement (HCLStatementObject (HCLObject ["module", nameOfModule] content)) =
+  parseModule nameOfModule content
+parseHCLStatement (HCLStatementObject (HCLObject ["terraform"] content)) =
+  parseTerraform content
+parseHCLStatement (HCLStatementObject (HCLObject ["atlas"] content)) =
+  parseAtlas content
+parseHCLStatement hclStatement = Left $ UnexpectedStatement hclStatement
