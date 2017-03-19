@@ -3,10 +3,11 @@ module Terraform where
 import Data.Bifunctor
 import Data.Hashable
 import Data.Text hiding (empty)
-import Data.HCL
+import Data.Text.IO
+import HCL.Types
 import Data.Scientific
 import Data.HashMap.Strict
-import Prelude hiding (lookup)
+import Prelude hiding (lookup, print, putStrLn)
 import Data.List (sortOn)
 import GHC.Generics hiding (moduleName)
 import Text.Megaparsec.Error
@@ -16,17 +17,13 @@ data TerraformVariableType = StringType
                            | MapType
                            deriving (Eq, Ord, Show, Generic)
 
-data TerraformStringPart = TerraformStringPlain Text
-                         | TerraformStringInterpolation Text
-                         deriving (Eq, Ord, Show, Generic)
-
 type TerraformMapContent = HashMap [Text] TerraformValue
 
 instance Ord TerraformMapContent where
   compare firstMap secondMap = compare (sortOn fst $ toList firstMap) (sortOn fst $ toList secondMap)
 
 data TerraformValue = TerraformNumber Scientific
-                    | TerraformString [TerraformStringPart]
+                    | TerraformString Text
                     | TerraformIdentifier Text
                     | TerraformMap TerraformMapContent
                     | TerraformList [TerraformValue]
@@ -71,16 +68,9 @@ data TerraformStatement = Resource
                         }
                         deriving (Eq, Ord, Show, Generic)
 
-type HCLMapContent = HashMap [Text] HCLValue
+type MegaparsecError = ParseError Char Dec
 
-deriving instance Ord HCLStringPart
-
-deriving instance Ord HCLValue
-
-instance Ord HCLMapContent where
-  compare firstMap secondMap = compare (sortOn fst $ toList firstMap) (sortOn fst $ toList secondMap)
-
-deriving instance Ord HCLStatement
+deriving instance Ord MegaparsecError
 
 data StatementParseFailure = UnexpectedValue HCLValue
                            | UnexpectedVariableContent HCLValue
@@ -89,14 +79,23 @@ data StatementParseFailure = UnexpectedValue HCLValue
                            | NotABool TerraformValue
                            | NotAString TerraformValue
                            | UnexpectedStatement HCLStatement
-                           | HCLParseFailure Text
+                           | HCLParseFailure MegaparsecError
                            deriving (Eq, Ord, Show, Generic)
 
 newtype TerraformConfig = TerraformConfig [TerraformStatement]
                           deriving (Eq, Ord, Show, Generic)
 
 hclParseErrorAsParseFailure :: ParseError Char Dec -> StatementParseFailure
-hclParseErrorAsParseFailure parserError = HCLParseFailure $ pack $ show parserError
+hclParseErrorAsParseFailure parserError = HCLParseFailure parserError
+
+class AsTerraformConfig a where
+  asConfig :: a -> TerraformConfig
+
+instance AsTerraformConfig TerraformConfig where
+  asConfig = id
+
+instance AsTerraformConfig TerraformStatement where
+  asConfig = TerraformConfig . return
 
 class TerraformConfigSyntax a where
   parse :: a -> Either StatementParseFailure TerraformConfig
@@ -110,6 +109,9 @@ instance TerraformConfigSyntax Text where
     return $ TerraformConfig statements
   print :: TerraformConfig -> Text
   print (TerraformConfig statements) = pack $ show $ pPrintHCL $ fmap tfStatementToHCLStatement statements
+
+putConfig :: AsTerraformConfig a => a -> IO ()
+putConfig terraformConfig = putStrLn $ print $ asConfig terraformConfig
 
 hclPartToTFPart :: HCLStringPart -> TerraformStringPart
 hclPartToTFPart (HCLStringPlain hclValue)      = TerraformStringPlain hclValue

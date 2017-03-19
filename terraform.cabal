@@ -26,7 +26,7 @@ library
                       , InstanceSigs
   ghc-options:          -Wall -fno-warn-orphans
   build-depends:        base >= 4.7 && < 5
-                      , language-hcl
+                      , hcl
                       , hashable
                       , scientific
                       , bytestring
@@ -41,7 +41,7 @@ test-suite terraform-test
   other-modules:        TerraformTest
   build-depends:        base >= 4.7 && < 5
                       , terraform
-                      , language-hcl
+                      , hcl
                       , hashable
                       , scientific
                       , bytestring

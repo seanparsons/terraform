@@ -14,19 +14,31 @@ derive makeArbitrary ''TerraformStringPart
 
 derive makeArbitrary ''TerraformVariableType
 
+identText :: Gen Text
+identText = fmap pack $ listOf1 $ elements (['a'..'z'] ++ ['A'..'Z'] ++ ['_', '-'])
+
+objectKey :: Gen [Text]
+objectKey = listOf1 identText
+
 notNestedValue :: Gen TerraformValue
 notNestedValue = oneof [ fmap TerraformNumber arbitrary
                        , fmap TerraformString arbitrary
-                       , fmap TerraformIdentifier arbitrary
+                       , fmap TerraformIdentifier identText
                        ]
 
 capSize :: Int -> Int
 capSize = min 10
 
+mapContent :: Int -> Gen TerraformMapContent
+mapContent maxDepth = fmap fromList $ scale capSize $ listOf $ pure (,) <*> objectKey <*> nestedValue (maxDepth - 1)
+
+cappedMapContent :: Gen TerraformMapContent
+cappedMapContent = mapContent 4
+
 nestedValue :: Int -> Gen TerraformValue
 nestedValue maxDepth =
   let nested = oneof [ notNestedValue
-                     , fmap (TerraformMap  . fromList) $ scale capSize $ listOf $ pure (,) <*> arbitrary <*> nestedValue (maxDepth - 1)
+                     , fmap TerraformMap $ mapContent maxDepth
                      , fmap TerraformList $ scale capSize $ listOf $ nestedValue (maxDepth - 1)
                      ]
   in  if maxDepth > 1 then nested else notNestedValue
@@ -34,7 +46,19 @@ nestedValue maxDepth =
 instance Arbitrary TerraformValue where
   arbitrary = nestedValue 4
 
-derive makeArbitrary ''TerraformStatement
+nonEmptyText :: Gen Text
+nonEmptyText = fmap pack $ listOf1 arbitrary
+
+instance Arbitrary TerraformStatement where
+  arbitrary = oneof [ pure Resource <*> identText <*> identText <*> cappedMapContent
+                    , pure DataSource <*> identText <*> identText <*> cappedMapContent
+                    , pure Provider <*> identText <*> cappedMapContent
+                    , pure Variable <*> identText <*> arbitrary <*> arbitrary <*> arbitrary
+                    , pure Output <*> identText <*> arbitrary <*> arbitrary <*> arbitrary
+                    , pure Module <*> nonEmptyText <*> nonEmptyText <*> cappedMapContent
+                    , pure Terraform <*> cappedMapContent
+                    , pure Atlas <*> cappedMapContent
+                    ]
 
 derive makeArbitrary ''TerraformConfig
 
