@@ -10,8 +10,6 @@ import Terraform
 import Data.DeriveTH
 import Data.HashMap.Strict
 
-derive makeArbitrary ''TerraformStringPart
-
 derive makeArbitrary ''TerraformVariableType
 
 identText :: Gen Text
@@ -23,7 +21,7 @@ objectKey = listOf1 identText
 notNestedValue :: Gen TerraformValue
 notNestedValue = oneof [ fmap TerraformNumber arbitrary
                        , fmap TerraformString arbitrary
-                       , fmap TerraformIdentifier identText
+                       , fmap TerraformBoolean arbitrary
                        ]
 
 capSize :: Int -> Int
@@ -62,8 +60,8 @@ instance Arbitrary TerraformStatement where
 
 derive makeArbitrary ''TerraformConfig
 
-toHCLAndBack = testProperty "parseHCLStatement $ tfStatementToHCLStatement == Right" $ \statement ->
-    let parsedResult = parseHCLStatement $ tfStatementToHCLStatement statement
+toHCLAndBack = testProperty "parseHCLObject $ tfStatementToHCLObject == Right" $ \statement ->
+    let parsedResult = parseHCLObject $ tfStatementToHCLObject statement
     in  counterexample ("parsedResult = " ++ (show parsedResult)) (parsedResult == Right statement)
 
 printAndParseText = testProperty "TerraformConfigSyntax Text" $ \config ->
@@ -73,14 +71,9 @@ printAndParseText = testProperty "TerraformConfigSyntax Text" $ \config ->
         counterexample ("parsedResult = " ++ (show parsedResult)) $
         (parsedResult == Right config)
 
-toHCLStringPartAndBack = testProperty "hclPartToTFPart $ tfPartToHCLPart == id" $ \stringPart ->
-    let parsedResult = hclPartToTFPart $ tfPartToHCLPart stringPart
-    in  counterexample ("parsedResult = " ++ (show parsedResult)) (parsedResult == stringPart)
-
 test_Terraform = [
                     testGroup "Terraform"
                       [ toHCLAndBack
                       , printAndParseText
-                      , toHCLStringPartAndBack
                       ]
                  ]

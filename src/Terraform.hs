@@ -4,6 +4,7 @@ import Data.Bifunctor
 import Data.Hashable
 import Data.Text hiding (empty)
 import Data.Text.IO
+import HCL
 import HCL.Types
 import Data.Scientific
 import Data.HashMap.Strict
@@ -24,7 +25,7 @@ instance Ord TerraformMapContent where
 
 data TerraformValue = TerraformNumber Scientific
                     | TerraformString Text
-                    | TerraformIdentifier Text
+                    | TerraformBoolean Bool
                     | TerraformMap TerraformMapContent
                     | TerraformList [TerraformValue]
                     deriving (Eq, Ord, Show, Generic)
@@ -78,7 +79,7 @@ data StatementParseFailure = UnexpectedValue HCLValue
                            | ObjectValueNotFound HCLMapContent Text
                            | NotABool TerraformValue
                            | NotAString TerraformValue
-                           | UnexpectedStatement HCLStatement
+                           | UnexpectedStatement HCLObject
                            | HCLParseFailure MegaparsecError
                            deriving (Eq, Ord, Show, Generic)
 
@@ -104,36 +105,28 @@ class TerraformConfigSyntax a where
 instance TerraformConfigSyntax Text where
   parse :: Text -> Either StatementParseFailure TerraformConfig
   parse parseInput = do
-    hclDoc <- first hclParseErrorAsParseFailure $ parseHCL "" parseInput
-    statements <- traverse parseHCLStatement hclDoc
+    (HCLDocument objects) <- first hclParseErrorAsParseFailure $ parseHCL "" parseInput
+    statements <- traverse parseHCLObject objects
     return $ TerraformConfig statements
   print :: TerraformConfig -> Text
-  print (TerraformConfig statements) = pack $ show $ pPrintHCL $ fmap tfStatementToHCLStatement statements
+  print (TerraformConfig statements) = hclDocumentToText $ HCLDocument $ fmap tfStatementToHCLObject statements
 
 putConfig :: AsTerraformConfig a => a -> IO ()
 putConfig terraformConfig = putStrLn $ print $ asConfig terraformConfig
 
-hclPartToTFPart :: HCLStringPart -> TerraformStringPart
-hclPartToTFPart (HCLStringPlain hclValue)      = TerraformStringPlain hclValue
-hclPartToTFPart (HCLStringInterp hclValue)     = TerraformStringInterpolation hclValue
-
-tfPartToHCLPart :: TerraformStringPart -> HCLStringPart
-tfPartToHCLPart (TerraformStringPlain tfValue)          = HCLStringPlain tfValue
-tfPartToHCLPart (TerraformStringInterpolation tfValue)  = HCLStringInterp tfValue
-
 parseValue :: HCLValue -> Either StatementParseFailure TerraformValue
-parseValue (HCLNumber hclValue)     = Right $ TerraformNumber hclValue
-parseValue (HCLString parts)        = Right $ TerraformString $ fmap hclPartToTFPart parts
-parseValue (HCLIdent hclValue)      = Right $ TerraformIdentifier hclValue
-parseValue (HCLObject [] content)   = fmap TerraformMap $ traverse parseValue content
-parseValue (HCLList elements)       = fmap TerraformList $ traverse parseValue elements
-parseValue hclValue                 = Left $ UnexpectedValue hclValue
+parseValue (HCLNumber hclValue)                     = Right $ TerraformNumber hclValue
+parseValue (HCLString text)                         = Right $ TerraformString text
+parseValue (HCLBoolean bool)                        = Right $ TerraformBoolean bool
+parseValue (HCLObjectValue (HCLObject [] content))  = fmap TerraformMap $ traverse parseValue content
+parseValue (HCLList elements)                       = fmap TerraformList $ traverse parseValue elements
+parseValue hclValue                                 = Left $ UnexpectedValue hclValue
 
 tfValueToHCLValue :: TerraformValue -> HCLValue
 tfValueToHCLValue (TerraformNumber tfValue)       = HCLNumber tfValue
-tfValueToHCLValue (TerraformString tfValue)       = HCLString $ fmap tfPartToHCLPart tfValue
-tfValueToHCLValue (TerraformIdentifier tfValue)   = HCLIdent tfValue
-tfValueToHCLValue (TerraformMap tfValue)          = HCLObject [] $ fmap tfValueToHCLValue tfValue
+tfValueToHCLValue (TerraformString tfValue)       = HCLString tfValue
+tfValueToHCLValue (TerraformBoolean tfValue)      = HCLBoolean tfValue
+tfValueToHCLValue (TerraformMap tfValue)          = HCLObjectValue $ HCLObject [] $ fmap tfValueToHCLValue tfValue
 tfValueToHCLValue (TerraformList tfValue)         = HCLList $ fmap tfValueToHCLValue tfValue
 
 tfMapToHCLMap :: TerraformMapContent -> HCLMapContent
@@ -143,31 +136,31 @@ insertMaybe :: (Eq k, Hashable k) => k -> Maybe a -> HashMap k a -> HashMap k a
 insertMaybe _ Nothing toUpdate              = toUpdate
 insertMaybe mapKey (Just mapValue) toUpdate = insert mapKey mapValue toUpdate
 
-tfStatementToHCLStatement :: TerraformStatement -> HCLStatement
-tfStatementToHCLStatement (Resource typeOfResource nameOfResource content) =
-  HCLStatementObject $ HCLObject ["resource", typeOfResource, nameOfResource] (tfMapToHCLMap content)
-tfStatementToHCLStatement (DataSource typeOfDataSource nameOfDataSource content) =
-  HCLStatementObject $ HCLObject ["data", typeOfDataSource, nameOfDataSource] (tfMapToHCLMap content)
-tfStatementToHCLStatement (Provider nameOfProvider content) =
-  HCLStatementObject $ HCLObject ["provider", nameOfProvider] (tfMapToHCLMap content)
-tfStatementToHCLStatement (Variable nameOfVariable typeOfVariable defaultValue description) =
-  HCLStatementObject $ HCLObject ["variable", nameOfVariable] $
+tfStatementToHCLObject :: TerraformStatement -> HCLObject
+tfStatementToHCLObject (Resource typeOfResource nameOfResource content) =
+  HCLObject ["resource", typeOfResource, nameOfResource] (tfMapToHCLMap content)
+tfStatementToHCLObject (DataSource typeOfDataSource nameOfDataSource content) =
+  HCLObject ["data", typeOfDataSource, nameOfDataSource] (tfMapToHCLMap content)
+tfStatementToHCLObject (Provider nameOfProvider content) =
+  HCLObject ["provider", nameOfProvider] (tfMapToHCLMap content)
+tfStatementToHCLObject (Variable nameOfVariable typeOfVariable defaultValue description) =
+  HCLObject ["variable", nameOfVariable] $
     insertMaybe ["type"] (fmap variableTypeToHCLValue typeOfVariable) $
     insertMaybe ["default"] (fmap tfValueToHCLValue defaultValue) $
     insertMaybe ["description"] (fmap tfValueToHCLValue description) $
     empty
-tfStatementToHCLStatement (Output nameOfOutput valueOfOutput dependsOn sensitive) =
-  HCLStatementObject $ HCLObject ["output", nameOfOutput] $
+tfStatementToHCLObject (Output nameOfOutput valueOfOutput dependsOn sensitive) =
+  HCLObject ["output", nameOfOutput] $
     insert ["value"] (tfValueToHCLValue valueOfOutput) $
     insertMaybe ["depends_on"] (fmap tfValueToHCLValue dependsOn) $
     insertMaybe ["sensitive"] (fmap boolToHCLValue sensitive) $
     empty
-tfStatementToHCLStatement (Module nameOfModule sourceOfModule content) =
-  HCLStatementObject $ HCLObject ["module", nameOfModule] (insert ["source"] (HCLString [HCLStringPlain sourceOfModule]) $ tfMapToHCLMap content)
-tfStatementToHCLStatement (Terraform content) =
-  HCLStatementObject $ HCLObject ["terraform"] (tfMapToHCLMap content)
-tfStatementToHCLStatement (Atlas content) =
-  HCLStatementObject $ HCLObject ["atlas"] (tfMapToHCLMap content)
+tfStatementToHCLObject (Module nameOfModule sourceOfModule content) =
+  HCLObject ["module", nameOfModule] (insert ["source"] (HCLString sourceOfModule) $ tfMapToHCLMap content)
+tfStatementToHCLObject (Terraform content) =
+  HCLObject ["terraform"] (tfMapToHCLMap content)
+tfStatementToHCLObject (Atlas content) =
+  HCLObject ["atlas"] (tfMapToHCLMap content)
 
 expectObjectValue :: HCLMapContent -> Text -> Either StatementParseFailure TerraformValue
 expectObjectValue content objectKey = do
@@ -178,32 +171,26 @@ expectMaybeObjectValue :: HCLMapContent -> Text -> Either StatementParseFailure 
 expectMaybeObjectValue content objectKey = traverse parseValue $ lookup [objectKey] content
 
 parseVariableType :: TerraformValue -> Either StatementParseFailure TerraformVariableType
-parseVariableType (TerraformString [TerraformStringPlain "string"]) = Right StringType
-parseVariableType (TerraformString [TerraformStringPlain "map"])    = Right MapType
-parseVariableType (TerraformString [TerraformStringPlain "list"])   = Right ListType
-parseVariableType terraformValue                                    = Left $ InvalidVariableType terraformValue
+parseVariableType (TerraformString "string") = Right StringType
+parseVariableType (TerraformString "map")    = Right MapType
+parseVariableType (TerraformString "list")   = Right ListType
+parseVariableType terraformValue             = Left $ InvalidVariableType terraformValue
 
 variableTypeToHCLValue :: TerraformVariableType -> HCLValue
-variableTypeToHCLValue StringType = HCLString [HCLStringPlain "string"]
-variableTypeToHCLValue MapType    = HCLString [HCLStringPlain "map"]
-variableTypeToHCLValue ListType   = HCLString [HCLStringPlain "list"]
+variableTypeToHCLValue StringType = HCLString "string"
+variableTypeToHCLValue MapType    = HCLString "map"
+variableTypeToHCLValue ListType   = HCLString "list"
 
 parseVariableAsBool :: TerraformValue -> Either StatementParseFailure Bool
-parseVariableAsBool (TerraformIdentifier "true")    = Right True
-parseVariableAsBool (TerraformIdentifier "false")   = Right False
-parseVariableAsBool terraformValue                  = Left $ NotABool terraformValue
+parseVariableAsBool (TerraformBoolean bool) = Right bool
+parseVariableAsBool terraformValue          = Left $ NotABool terraformValue
 
 boolToHCLValue :: Bool -> HCLValue
-boolToHCLValue True   = HCLIdent "true"
-boolToHCLValue False  = HCLIdent "false"
-
-stringPartAsText :: TerraformStringPart -> Text
-stringPartAsText (TerraformStringPlain textValue)         = textValue
-stringPartAsText (TerraformStringInterpolation textValue) = textValue
+boolToHCLValue = HCLBoolean
 
 parseVariableAsText :: TerraformValue -> Either StatementParseFailure Text
-parseVariableAsText (TerraformString parts)       = Right $ foldMap stringPartAsText parts
-parseVariableAsText terraformValue                = Left $ NotAString terraformValue
+parseVariableAsText (TerraformString text)  = Right text
+parseVariableAsText terraformValue          = Left $ NotAString terraformValue
 
 parseMapContent :: HCLMapContent -> Either StatementParseFailure TerraformMapContent
 parseMapContent content = traverse parseValue content
@@ -285,22 +272,22 @@ parseAtlas content = do
             { atlasContent          = parsedContent
             }
 
-parseHCLStatement :: HCLStatement -> Either StatementParseFailure TerraformStatement
-parseHCLStatement (HCLStatementObject (HCLObject ["resource", typeOfResource, nameOfResource] content)) =
+parseHCLObject :: HCLObject -> Either StatementParseFailure TerraformStatement
+parseHCLObject (HCLObject ["resource", typeOfResource, nameOfResource] content) =
   parseResource typeOfResource nameOfResource content
-parseHCLStatement (HCLStatementObject (HCLObject ["data", typeOfDataSource, nameOfDataSource] content)) =
+parseHCLObject (HCLObject ["data", typeOfDataSource, nameOfDataSource] content) =
   parseDataSource typeOfDataSource nameOfDataSource content
-parseHCLStatement (HCLStatementObject (HCLObject ["provider", nameOfProvider] content)) =
+parseHCLObject (HCLObject ["provider", nameOfProvider] content) =
   parseProvider nameOfProvider content
-parseHCLStatement (HCLStatementObject (HCLObject ["variable", nameOfVariable] content)) =
+parseHCLObject (HCLObject ["variable", nameOfVariable] content) =
   parseVariable nameOfVariable content
-parseHCLStatement (HCLStatementObject (HCLObject ["output", nameOfOutput] content)) =
+parseHCLObject (HCLObject ["output", nameOfOutput] content) =
   parseOutput nameOfOutput content
-parseHCLStatement (HCLStatementObject (HCLObject ["module", nameOfModule] content)) =
+parseHCLObject (HCLObject ["module", nameOfModule] content) =
   parseModule nameOfModule content
-parseHCLStatement (HCLStatementObject (HCLObject ["terraform"] content)) =
+parseHCLObject (HCLObject ["terraform"] content) =
   parseTerraform content
-parseHCLStatement (HCLStatementObject (HCLObject ["atlas"] content)) =
+parseHCLObject (HCLObject ["atlas"] content) =
   parseAtlas content
-parseHCLStatement hclStatement = Left $ UnexpectedStatement hclStatement
+parseHCLObject hclObject = Left $ UnexpectedStatement hclObject
 
