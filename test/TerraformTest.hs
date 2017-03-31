@@ -53,7 +53,7 @@ instance Arbitrary TerraformStatement where
                     , pure Provider <*> identText <*> cappedMapContent
                     , pure Variable <*> identText <*> arbitrary <*> arbitrary <*> arbitrary
                     , pure Output <*> identText <*> arbitrary <*> arbitrary <*> arbitrary
-                    , pure Module <*> nonEmptyText <*> nonEmptyText <*> cappedMapContent
+                    , pure Module <*> identText <*> identText <*> cappedMapContent
                     , pure Terraform <*> cappedMapContent
                     , pure Atlas <*> cappedMapContent
                     ]
