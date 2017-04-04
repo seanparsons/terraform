@@ -26,6 +26,7 @@ library
                       , InstanceSigs
   ghc-options:          -Wall -fno-warn-orphans
   build-depends:        base >= 4.7 && < 5
+                      , lens
                       , hcl
                       , hashable
                       , scientific

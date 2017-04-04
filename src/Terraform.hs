@@ -2,6 +2,7 @@ module Terraform where
 
 import Data.Bifunctor
 import Data.Hashable
+import Data.List (sortBy)
 import Data.Text hiding (empty)
 import Data.Text.IO
 import HCL
@@ -12,6 +13,7 @@ import Prelude hiding (lookup, print, putStrLn)
 import Data.List (sortOn)
 import GHC.Generics hiding (moduleName)
 import Text.Megaparsec.Error
+import Control.Lens
 
 data TerraformVariableType = StringType
                            | ListType
@@ -29,6 +31,8 @@ data TerraformValue = TerraformNumber Scientific
                     | TerraformMap TerraformMapContent
                     | TerraformList [TerraformValue]
                     deriving (Eq, Ord, Show, Generic)
+
+makePrisms ''TerraformValue
 
 data TerraformStatement = Resource
                         { resourceType          :: Text
@@ -69,6 +73,8 @@ data TerraformStatement = Resource
                         }
                         deriving (Eq, Ord, Show, Generic)
 
+makePrisms ''TerraformStatement
+
 type MegaparsecError = ParseError Char Dec
 
 deriving instance Ord MegaparsecError
@@ -83,8 +89,10 @@ data StatementParseFailure = UnexpectedValue HCLValue
                            | HCLParseFailure MegaparsecError
                            deriving (Eq, Ord, Show, Generic)
 
-newtype TerraformConfig = TerraformConfig [TerraformStatement]
+newtype TerraformConfig = TerraformConfig { statements :: [TerraformStatement] }
                           deriving (Eq, Ord, Show, Generic)
+
+makeLensesFor [("statements", "terraformConfigStatements")] ''TerraformConfig
 
 hclParseErrorAsParseFailure :: ParseError Char Dec -> StatementParseFailure
 hclParseErrorAsParseFailure parserError = HCLParseFailure parserError
@@ -106,10 +114,10 @@ instance TerraformConfigSyntax Text where
   parse :: Text -> Either StatementParseFailure TerraformConfig
   parse parseInput = do
     (HCLDocument objects) <- first hclParseErrorAsParseFailure $ parseHCL "" parseInput
-    statements <- traverse parseHCLObject objects
-    return $ TerraformConfig statements
+    configStatements <- traverse parseHCLObject objects
+    return $ TerraformConfig configStatements
   print :: TerraformConfig -> Text
-  print (TerraformConfig statements) = hclDocumentToText $ HCLDocument $ fmap tfStatementToHCLObject statements
+  print (TerraformConfig configStatements) = hclDocumentToText $ HCLDocument $ fmap tfStatementToHCLObject configStatements
 
 putConfig :: AsTerraformConfig a => a -> IO ()
 putConfig terraformConfig = putStrLn $ print $ asConfig terraformConfig
@@ -119,7 +127,7 @@ parseValue (HCLNumber hclValue)                     = Right $ TerraformNumber hc
 parseValue (HCLString text)                         = Right $ TerraformString text
 parseValue (HCLBoolean bool)                        = Right $ TerraformBoolean bool
 parseValue (HCLObjectValue (HCLObject [] content))  = fmap TerraformMap $ traverse parseValue content
-parseValue (HCLList elements)                       = fmap TerraformList $ traverse parseValue elements
+parseValue (HCLList listElems)                      = fmap TerraformList $ traverse parseValue listElems
 parseValue hclValue                                 = Left $ UnexpectedValue hclValue
 
 tfValueToHCLValue :: TerraformValue -> HCLValue
@@ -291,3 +299,13 @@ parseHCLObject (HCLObject ["atlas"] content) =
   parseAtlas content
 parseHCLObject hclObject = Left $ UnexpectedStatement hclObject
 
+prettySortOrdering :: TerraformStatement -> TerraformStatement -> Ordering
+prettySortOrdering v1@ (Variable _ _ _ _) v2@ (Variable _ _ _ _)  = compare v1 v2
+prettySortOrdering (Variable _ _ _ _) _                           = LT
+prettySortOrdering (Output _ _ _ _) (Variable _ _ _ _)            = GT
+prettySortOrdering o1@ (Output _ _ _ _) o2@ (Output _ _ _ _)      = compare o1 o2
+prettySortOrdering (Output _ _ _ _) _                             = LT
+prettySortOrdering ts1 ts2                                        = compare ts1 ts2
+
+prettySort :: TerraformConfig -> TerraformConfig
+prettySort = over terraformConfigStatements (sortBy prettySortOrdering)

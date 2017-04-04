@@ -3,7 +3,7 @@ module TerraformTest where
 import Data.Text
 import Prelude hiding (print)
 import Test.Tasty.QuickCheck
-import Test.QuickCheck
+import Test.QuickCheck()
 import Test.QuickCheck.Instances()
 import Test.Tasty
 import Terraform
@@ -60,20 +60,27 @@ instance Arbitrary TerraformStatement where
 
 derive makeArbitrary ''TerraformConfig
 
+toHCLAndBack :: TestTree
 toHCLAndBack = testProperty "parseHCLObject $ tfStatementToHCLObject == Right" $ \statement ->
     let parsedResult = parseHCLObject $ tfStatementToHCLObject statement
     in  counterexample ("parsedResult = " ++ (show parsedResult)) (parsedResult == Right statement)
 
-printAndParseText = testProperty "TerraformConfigSyntax Text" $ \config ->
+
+transformPrintAndParseText :: TestName -> (TerraformConfig -> TerraformConfig) -> TestTree
+transformPrintAndParseText title transform = testProperty title $ \config ->
     let printedResult = print config :: Text
         parsedResult = parse printedResult
+        transformedResult = fmap transform parsedResult
     in  counterexample ("printedResult = " ++ (show printedResult)) $
         counterexample ("parsedResult = " ++ (show parsedResult)) $
-        (parsedResult == Right config)
+        counterexample ("transformedResult = " ++ (show transformedResult)) $
+        (transformedResult == Right (transform config))
 
+test_Terraform :: [TestTree]
 test_Terraform = [
                     testGroup "Terraform"
                       [ toHCLAndBack
-                      , printAndParseText
+                      , transformPrintAndParseText "TerraformConfigSyntax Text" id
+                      , transformPrintAndParseText "TerraformConfigSyntax Text (with prettySort)" prettySort
                       ]
                  ]
